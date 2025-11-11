@@ -1,0 +1,188 @@
+:root{
+	--bs-primary:#1F5AA6;
+	--bs-primary-rgb:31,90,166;
+	--bs-secondary:#6c757d;
+	--bs-accent:#2D8CFF;
+	--bs-accent-rgb:45,140,255;
+	--bs-body-bg:#f6f8fb;
+	--app-hero-gradient:linear-gradient(135deg, rgba(31,90,166,.9), rgba(45,140,255,.85));
+}
+
+.btn-accent{
+	--bs-btn-color:#fff;
+	--bs-btn-bg:var(--bs-accent);
+	--bs-btn-border-color:var(--bs-accent);
+	--bs-btn-hover-bg:#1f79ef;
+	--bs-btn-hover-border-color:#1f79ef;
+	--bs-btn-focus-shadow-rgb:var(--bs-accent-rgb);
+}
+
+.app-navbar{
+	background: var(--bs-primary);
+}
+
+.app-footer{
+	background: #0f2d54;
+	color: rgba(255,255,255,.8);
+}
+
+.hero{
+	background: var(--app-hero-gradient), url('../img/hero-car.svg') center/cover no-repeat;
+	border-radius: 1rem;
+	color: #fff;
+	padding: 4rem 2rem;
+}
+
+.card-hover:hover{
+	transform: translateY(-2px);
+	box-shadow: 0 .5rem 1rem rgba(0,0,0,.08);
+	transition: all .2s ease;
+}
+
+.timeline{
+	position: relative;
+	padding-left: 1.5rem;
+}
+.timeline::before{
+	content: "";
+	position: absolute;
+	left: .5rem;
+	top: 0; bottom: 0;
+	width: 2px;
+	background: rgba(31,90,166,.2);
+}
+.timeline .item{
+	position: relative;
+	margin-bottom: 1rem;
+}
+.timeline .item::before{
+	content: "";
+	position: absolute;
+	left: -1.1rem; top: .35rem;
+	width: .75rem; height: .75rem;
+	border-radius: 50%;
+	background: var(--bs-primary);
+	box-shadow: 0 0 0 .25rem rgba(31,90,166,.15);
+}
+
+.table-card{
+	background:#fff;border:1px solid rgba(0,0,0,.06);border-radius:.75rem
+}
+
+/* —— Chat Page —— */
+.chat-bg{
+	position: relative;
+	background:
+		radial-gradient(60rem 60rem at -10% -10%, rgba(45,140,255,.20), transparent 50%),
+		radial-gradient(50rem 50rem at 110% 10%, rgba(31,90,166,.18), transparent 50%),
+		radial-gradient(40rem 40rem at 50% 120%, rgba(45,140,255,.18), transparent 50%);
+}
+.glass{
+	background: rgba(255,255,255,.6);
+	backdrop-filter: blur(10px);
+	border: 1px solid rgba(255,255,255,.5);
+	border-radius: 1rem;
+	box-shadow: 0 .5rem 2rem rgba(31,90,166,.08);
+}
+.chat-bubble{
+	padding: .6rem .8rem;
+	border-radius: .75rem;
+	max-width: 80%;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+.chat-bubble.user{
+	background: var(--bs-primary);
+	color: #fff;
+}
+.chat-bubble.bot{
+	background: #ffffff;
+	border: 1px solid rgba(0,0,0,.06);
+	color: #1f2a37;
+}
+.chat-avatar{
+	width: 32px; height: 32px;
+	border-radius: 50%;
+	display: inline-flex;
+	align-items: center; justify-content: center;
+	font-weight: 700;
+	color: #fff;
+	background: var(--bs-primary);
+}
+.chat-avatar.bot{
+	background: linear-gradient(135deg, #1F5AA6, #2D8CFF);
+}
+.typing{
+	display:inline-flex; gap:4px; align-items:center;
+}
+.typing .dot{
+	width:6px;height:6px;border-radius:50%;background:#9aa4af;opacity:.6;animation: blink 1.2s infinite;
+}
+.typing .dot:nth-child(2){animation-delay:.2s}
+.typing .dot:nth-child(3){animation-delay:.4s}
+@keyframes blink{
+	0%,100%{transform:translateY(0);opacity:.6}
+	50%{transform:translateY(-3px);opacity:1}
+}
+.chip{
+	border:1px solid rgba(0,0,0,.08);
+	background:#fff;
+	border-radius:999px;
+	padding:.25rem .6rem;
+	cursor:pointer;
+}
+.chip:hover{background:#f3f6fb}
+.toolbar-badge{
+	background: rgba(255,255,255,.6);
+	border: 1px solid rgba(0,0,0,.06);
+	border-radius: .5rem;
+	padding: .25rem .5rem;
+}
+
+/* code block */
+.message-actions{
+	display:flex; gap:.5rem; align-items:center; margin-top:.25rem;
+}
+.btn-copy{
+	border:1px solid rgba(0,0,0,.08);
+	background:#fff;
+	border-radius:.35rem;
+	padding:.1rem .4rem;
+	font-size:.75rem;
+}
+.btn-copy:hover{background:#f3f6fb}
+.chat-bubble pre{
+	border:1px solid rgba(0,0,0,.06);
+	border-radius:.5rem;
+	padding:.6rem .75rem;
+	background:#f8fafc;
+}
+.refs details{
+	margin-top:.25rem;
+}
+.refs summary{
+	cursor:pointer;
+	color:#1F5AA6;
+}
+
+/* 移动端表格卡片化 */
+@media (max-width: 767.98px){
+	table.table.stackable thead{display:none}
+	table.table.stackable tbody tr{display:block;margin-bottom:.75rem;border:1px solid rgba(0,0,0,.06);border-radius:.5rem;background:#fff}
+	table.table.stackable tbody td{display:flex;justify-content:space-between;gap:1rem;padding:.5rem .75rem}
+	table.table.stackable tbody td::before{content:attr(data-label);font-weight:600;color:#6c757d}
+}
+
+/* 可访问性焦点可见 */
+:focus-visible{
+	outline: 3px solid rgba(45,140,255,.6);
+	outline-offset: 2px;
+}
+
+/* 懒加载占位 */
+.lazy{
+	filter: blur(6px);
+	background: #e9eef5;
+}
+
+
