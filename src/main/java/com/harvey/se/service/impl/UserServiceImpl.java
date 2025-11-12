@@ -1,0 +1,427 @@
+package com.harvey.se.service.impl;
+
+
+import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.util.RandomUtil;
+import cn.hutool.core.util.StrUtil;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.conditions.update.LambdaUpdateChainWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.harvey.se.dao.UserMapper;
+import com.harvey.se.exception.BadRequestException;
+import com.harvey.se.exception.UnauthorizedException;
+import com.harvey.se.pojo.dto.LoginFormDto;
+import com.harvey.se.pojo.dto.UpsertUserFormDto;
+import com.harvey.se.pojo.dto.UserDto;
+import com.harvey.se.pojo.dto.UserInfoDto;
+import com.harvey.se.pojo.entity.User;
+import com.harvey.se.properties.ConstantsProperties;
+import com.harvey.se.properties.JwtProperties;
+import com.harvey.se.service.UserService;
+import com.harvey.se.util.*;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.aop.framework.AopContext;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import javax.annotation.Resource;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+
+/**
+ * @author <a href="mailto:harvey.blocks@outlook.com">Harvey Blocks</a>
+ * @version 1.0
+ * @date 2024-02-01 14:10
+ */
+@Service
+@Slf4j
+public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements UserService {
+    private final RedissonLock<UserDto> redissonLock;
+    @Resource
+    StringRedisTemplate stringRedisTemplate;
+    @Resource
+    private PasswordEncoder passwordEncoder;
+    @Resource
+    private JwtTool jwtTool;
+    @Resource
+    private JwtProperties jwtProperties;
+    @Resource
+    private ConstantsProperties constantsProperties;
+
+    public UserServiceImpl(RedissonLock<UserDto> redissonLock) {
+        this.redissonLock = redissonLock;
+    }
+
+    @Override
+    public String sendCode(String phone) {
+        String code = null;
+        if (RegexUtils.isPhoneEffective(phone)) {
+            code = RandomUtil.randomNumbers(/*length*/ 6);
+            // 发送短信验证码
+            // 搞个假的
+            log.debug("\n尊敬的" + phone + "用户:\n\t您的短信验证码是: " + code);
+        }
+        return code;
+    }
+
+    @Override
+    public User loginByCode(String codeCache, String phone, String code) {
+
+        // code的长度已经正确,code不为null
+        if (!code.equals(codeCache)) {
+            return null;
+        }
+
+        // 如果验证码手机号一致, 去数据库查找用户
+        User user = selectByPhone(phone);
+
+        // 判断用户是否存在
+        if (user == null) {
+            // 不存在就创建新用户并保存
+            user = new User();
+            user.setPhone(phone);
+            //newUser.setId()主键会自增, 不必管他
+            // user.setIcon(User.DEFAULT_ICON);//头像使用默认的
+            user.setNickname(User.DEFAULT_NICKNAME);//昵称使用默认的
+            user.setPoints(User.DEFAULT_POINTS);// 用户使用默认的
+            // 随机生成或直接为null,为null就百分百无法通过密码登录了.
+            // 随机可能被猜中?
+            user.setPassword(null);
+            user.setUpdateTime(LocalDateTime.now());
+            //这里就先不要增改扰了人家数据库清静
+            baseMapper.insert(user);
+            // user为null, user的id怎么确认? 再查一次? 太反人类了吧
+            user = selectByPhone(phone);
+        }
+        // log.debug(String.valueOf(user));
+        // 返回user
+        return user;
+    }
+
+    @Override
+    public User loginByPassword(String phone, String password) {
+        if (!RegexUtils.isPasswordEffective(password)) {
+            throw new BadRequestException("密码格式不正确,应是4~32位的字母、数字、下划线");
+        }
+        // 依据电话号码从service取数据
+        User user = selectByPhone(phone);
+        // 取出来的数据和密码作比较
+        if (user == null) {
+            User nullUser = new User();
+            nullUser.setId(-1L);
+            return nullUser;//用户名不存在
+        }
+        if (!passwordEncoder.matches(password, user.getPassword())) {
+            // password经过检验, 非null, 数据库里的password可能是null
+            throw new BadRequestException("用户名或密码错误");
+        }
+        // log.debug(String.valueOf(user));
+        // 正确则返回user值
+        return user;
+    }
+
+    @Override
+    public String chooseLoginWay(LoginFormDto loginForm) {
+        User user /* = null*/;
+        String phone = loginForm.getPhone();
+        String code = loginForm.getCode();
+        String password = loginForm.getPassword();
+        if (!RegexUtils.isPhoneEffective(phone)
+            // 网上说参数校验放在controller, 这算参数校验吗?
+        ) {
+            throw new UnauthorizedException("请正确输入电话号");
+        }
+        if ((password == null || password.isEmpty()) == (code == null || code.isEmpty())) {
+            // 无法决定是密码登录还是验证码登录的情况
+            throw new BadRequestException("请正确输入验证码或密码");
+        }
+        if (code != null && !code.isEmpty()) {
+            if (code.length() != 6) {
+                throw new BadRequestException("请输入正确格式的验证码");
+            }
+            // 使用验证码登录
+            String codeCache = stringRedisTemplate.opsForValue().get(RedisConstants.User.LOGIN_CODE_KEY + phone);
+            if (codeCache == null || codeCache.isEmpty()) {
+                throw new BadRequestException("该手机未申请验证码, 请确认手机号或是否已经请求验证码");
+            }
+            user = this.loginByCode(codeCache, phone, code);
+            if (user == null) {
+                throw new BadRequestException("验证码不正确");
+            } else {
+                // 如果成功了, 就删除Redis缓存
+                stringRedisTemplate.delete(RedisConstants.User.LOGIN_CODE_KEY + phone);
+                // 否则不删除会话,给用户一个再次输入验证码的机会
+            }
+        } else /*if(password!=null&&!password.isEmpty())*/ {
+            user = this.loginByPassword(phone, password);
+            if (user == null) {
+                throw new UnauthorizedException("密码不正确");
+            } else if (user.getId().equals(-1L)) {
+                throw new UnauthorizedException("该用户不存在");
+            }
+        }
+
+
+        // session.setAttribute(Constants.USER_SESSION_KEY,new UserDto(user.getId(),user.getNickName(),user.getIcon()));
+        // 将用户DTO存入Redis
+        String token =// 生成随机Token,hu tool工具包
+                jwtTool.createToken(user.getId(), jwtProperties.getTokenTTL());//true表示不带中划线;
+
+
+        saveToRedis(new UserDto(user), token);
+        // 返回token
+        return token;
+    }
+
+    @Override
+    @Transactional
+    public String register(UpsertUserFormDto registerForm) {
+        User registerUser = new User();
+        String phone = registerForm.getPhone();
+        if (!RegexUtils.isPhoneEffective(phone)) {
+            throw new BadRequestException("不正确额电话号码格式");
+        }
+        registerUser.setPhone(phone);
+        registerUser.setPassword(passwordEncoder.encode(registerForm.getPassword()));
+        registerUser.setNickname(registerForm.getNickname());
+        registerUser.setPoints(User.DEFAULT_POINTS);
+        boolean saved = save(registerUser);
+        if (!saved) {
+            log.error("保存失败错误");
+            return null;
+        }
+        // 依据电话号码从service取数据
+        User user = selectByPhone(registerUser.getPhone());
+
+        // 取出来的数据和密码作比较
+        if (user == null) {
+            return null;
+        }
+
+        // 将用户DTO存入Redis
+        String token = jwtTool.createToken(user.getId(), jwtProperties.getTokenTTL());
+        saveToRedis(new UserDto(user), token);
+        return token;
+    }
+
+    @Override
+    @Transactional
+    public String updateUser(UpsertUserFormDto userDto, String token) {
+        // 更新实体数据
+        User user = this.getById(UserHolder.currentUserId());
+        String nickname = userDto.getNickname();
+        if (!StrUtil.isEmpty(nickname)) {
+            user.setNickname(nickname);
+        }
+        if (RegexUtils.isPasswordEffective(userDto.getPassword())) {
+            user.setPassword(passwordEncoder.encode(userDto.getPassword()));
+        } else {
+            throw new BadRequestException("密码个数错误, 应当是4~32位的字母、数字、下划线");
+        }
+        if (RegexUtils.isPhoneEffective(user.getPhone())) {
+            user.setPhone(userDto.getPhone());
+        } else {
+            throw new BadRequestException("电话格式错误");
+        }
+        // ignore upsert of role
+        // ignore upsert of points
+        // 更新
+        String tokenKey = RedisConstants.User.USER_CACHE_KEY + jwtTool.parseToken(token);
+        String lastTime = Optional.ofNullable((String) stringRedisTemplate.opsForHash()
+                        .get(tokenKey, RedisConstants.User.REQUEST_TIME_FIELD))
+                .orElseGet(() -> constantsProperties.getRestrictRequestTimes());
+        stringRedisTemplate.delete(tokenKey);
+        // 更新数据库
+        UserService userService = (UserService) AopContext.currentProxy();
+        boolean update = userService.updateById(user);
+        if (!update) {
+            throw new BadRequestException("更新失败,无此用户");
+        }
+        UserHolder.saveUser(new UserDto(user));
+        saveUser2Redis(tokenKey, user2Map(UserHolder.getUser()), Long.parseLong(lastTime));
+        return jwtTool.createToken(user.getId(), jwtProperties.getTokenTTL());
+    }
+
+    private void saveToRedis(UserDto userDTO, String token) {
+        if (userDTO == null) {
+            throw new BadRequestException("用户信息为null");
+        }
+        String tokenKey = RedisConstants.User.USER_CACHE_KEY + jwtTool.parseToken(token);
+        saveUser2Redis(tokenKey, user2Map(userDTO), RedisConstants.ENTITY_CACHE_TTL);
+    }
+
+    @Override
+    public User selectByPhone(String phone) {
+        LambdaQueryWrapper<User> lambdaQueryWrapper = new LambdaQueryWrapper<>();
+        lambdaQueryWrapper.select().eq(User::getPhone, phone);
+        return baseMapper.selectOne(lambdaQueryWrapper);
+    }
+
+    @Override
+    public UserDto queryUserByIdWithRedisson(Long userId) throws InterruptedException {
+        log.debug("queryMutexFixByLock");
+        String key = RedisConstants.User.USER_CACHE_KEY + userId;
+        // 从缓存查
+        log.debug("用户:" + userId + "从缓存查");
+        Map<Object, Object> userFieldMap = stringRedisTemplate.opsForHash().entries(key);
+        if (userFieldMap.isEmpty()) {
+            // Redis里没有数据
+            log.debug("缓存不存在用户:" + userId);
+            String lockKey = RedisConstants.User.LOCK_KEY + userId;
+            return redissonLock.asynchronousLock(lockKey, () -> getFromDbAndWriteToCache(userId, key));
+        } else if (((String) userFieldMap.get("id")).isEmpty()) {
+            log.warn("Redis中存在的假数据" + userId);
+            return null;
+        }
+        // 在Redis中有正常的数据
+        // 第三个参数: 是否忽略转换过程中产生的异常
+        userFieldMap.remove("time");
+        try {
+            return BeanUtil.fillBeanWithMap(userFieldMap, new UserDto(), false);
+        } catch (Exception e) {
+            log.error("在转化UserFieldMap时出现错误错误" + userFieldMap);
+            throw new RuntimeException(e);
+        }
+    }
+
+    private Map<String, String> user2Map(UserDto user) {
+        return Map.of(
+                RedisConstants.User.ID_FIELD,
+                user.getId().toString(),
+                RedisConstants.User.NICKNAME_FIELD,
+                user.getNickname(),
+                RedisConstants.User.POINTS_FIELD,
+                user.getPoints().toString(),
+                RedisConstants.User.ROLE_FIELD,
+                user.getRole().toString(),
+                RedisConstants.User.REQUEST_TIME_FIELD,
+                constantsProperties.getRestrictRequestTimes()
+        );
+    }
+
+
+    /**
+     * 解决穿透专用
+     *
+     * @param id  id
+     * @param key key
+     * @return shop
+     */
+    private UserDto getFromDbAndWriteToCache(Long id, String key) {
+        // 缓存不存在
+        // 使用缓存空对象的逻辑
+        log.debug("getFromDbAndWriteToCache");
+        UserDto userDTO = null;
+        Long ttl = RedisConstants.CACHE_NULL_TTL;
+        Map<String, String> userFieldMap = Map.of("id", "");
+        // 数据库查
+        log.debug("从数据库查用户:" + id);
+        User user = this.getById(id);
+        if (user != null) {
+            userDTO = new UserDto(user);
+            // 存在,写入Cache,更改TTL
+            log.debug("数据库中存在用户:" + id);
+            userFieldMap = user2Map(userDTO);
+            ttl = RedisConstants.ENTITY_CACHE_TTL;
+        } else {
+            // 是虚假的用户,存入Redis,防止虚空索敌
+            log.warn(id + "是虚假的用户,Redis中存入假数据中");
+        }
+        saveUser2Redis(key, userFieldMap, ttl);
+        return userDTO;
+    }
+
+    private void saveUser2Redis(String key, Map<String, String> map2Redis, Long ttl) {
+        stringRedisTemplate.opsForHash().putAll(key, map2Redis);
+        if (-1 != ttl) {
+            stringRedisTemplate.expire(key, plusRandomSec(ttl), TimeUnit.SECONDS);
+        }
+    }
+
+    /**
+     * 通过随机改变ttl, 防止雪崩
+     *
+     * @return 增加了随机值的ttl
+     */
+    private Long plusRandomSec(Long ttl) {
+        long random;
+        if (ttl <= 10L) {
+            random = 0;
+        } else {
+            long exSec = ttl / 10;
+            random = RandomUtil.randomLong(-exSec, exSec);
+        }
+        LocalDateTime time = LocalDateTime.now().plusSeconds(ttl + random);
+        return time.toEpochSecond(ZoneOffset.of("+8"));
+    }
+
+    @Override
+    public UserDto queryUserById(Long userId) {
+        return new UserDto(this.getById(userId));
+    }
+
+    @Override
+    public UserInfoDto queryUserEntityById(Long userId) {
+        User user = this.getById(userId);
+        if (user == null) {
+            throw new BadRequestException("Unknown user of:" + userId);
+        }
+        return UserInfoDto.adapte(user);
+    }
+
+    @Override
+    public List<UserInfoDto> queryUserEntityByPage(Page<User> page) {
+        return queryUserByPage(page).stream().map(UserInfoDto::adapte).collect(Collectors.toList());
+    }
+
+    @Override
+    public void updateUserEntity(UserInfoDto newUser) {
+        if (newUser.getPhone() != null && !RegexUtils.isPhoneEffective(newUser.getPhone())) {
+            // 不是合法的电话号码
+            newUser.setPhone(null);
+        }
+        // 啥都可以更新
+        boolean update = super.updateById(new User(newUser));
+        if (update) {
+            log.debug("更新{}成功", newUser.getId());
+        } else {
+            log.warn("更新{}失败", newUser.getId());
+        }
+    }
+
+    @Override
+    public List<User> queryUserByPage(Page<User> page) {
+        return super.lambdaQuery().page(page).getRecords();
+    }
+
+    @Override
+    public void loadCache(Long id) throws InterruptedException {
+        this.queryUserByIdWithRedisson(id);
+    }
+
+    @Override
+    public void increasePoint(Long userId, int currentPoint, int point) {
+        // 1. 更新数据
+        int nextPoint = currentPoint + point;
+        if (nextPoint < 0) {
+            throw new BadRequestException("余额不足");
+        }
+        boolean updated = new LambdaUpdateChainWrapper<>(baseMapper).set(User::getPoints, nextPoint)
+                .eq(User::getId, userId)
+                .update();
+        // 2. 删除缓存
+        if (!updated) {
+            throw new IllegalStateException(userId + "增加 point " + point + "失败!");
+        }
+        stringRedisTemplate.delete(RedisConstants.User.USER_CACHE_KEY + userId);
+    }
+
+}
