@@ -1,0 +1,7 @@
+{
+  "name": "se-demo",
+  "version": "1.0.0",
+  "devDependencies": {
+    "axios": "^1.13.2"
+  }
+}
